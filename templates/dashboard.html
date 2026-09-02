@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Icarus — Options Alpha Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: 'Courier New', monospace;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            padding: 20px 0;
+            border-bottom: 1px solid #1a1a2e;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            font-size: 2.5em;
+            color: #f0a500;
+            letter-spacing: 4px;
+        }
+        .header .subtitle {
+            color: #888;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        .header .status {
+            display: inline-block;
+            margin-top: 10px;
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        .status-live { background: #0a3d0a; color: #4caf50; border: 1px solid #4caf50; }
+        .status-offline { background: #3d0a0a; color: #f44336; border: 1px solid #f44336; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card {
+            background: #12121a;
+            border: 1px solid #1a1a2e;
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .card h2 {
+            color: #f0a500;
+            font-size: 1em;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #1a1a2e;
+        }
+        .stat-label { color: #888; }
+        .stat-value { color: #fff; font-weight: bold; }
+        .stat-value.green { color: #4caf50; }
+        .stat-value.red { color: #f44336; }
+        .stat-value.gold { color: #f0a500; }
+        .decision-list { max-height: 400px; overflow-y: auto; }
+        .decision-item {
+            padding: 12px;
+            margin-bottom: 8px;
+            border-radius: 8px;
+            border-left: 3px solid;
+        }
+        .decision-approve {
+            background: #0a1f0a;
+            border-color: #4caf50;
+        }
+        .decision-reject {
+            background: #1f0a0a;
+            border-color: #f44336;
+        }
+        .decision-time { color: #666; font-size: 0.75em; }
+        .decision-symbol { color: #f0a500; font-weight: bold; }
+        .decision-reasoning { color: #ccc; font-size: 0.85em; margin-top: 4px; }
+        .trade-item {
+            padding: 10px;
+            margin-bottom: 6px;
+            background: #0a0a14;
+            border-radius: 6px;
+            font-size: 0.85em;
+        }
+        .positions-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+        }
+        .positions-table th {
+            color: #f0a500;
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid #1a1a2e;
+        }
+        .positions-table td {
+            padding: 8px;
+            border-bottom: 1px solid #0f0f1a;
+        }
+        .refresh-bar {
+            text-align: center;
+            padding: 15px;
+            color: #666;
+            font-size: 0.8em;
+        }
+        .full-width { grid-column: 1 / -1; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>&#9788; ICARUS</h1>
+        <div class="subtitle">AI-Powered Options Alpha Agent</div>
+        <div class="status {{ 'status-live' if status == 'running' else 'status-offline' }}">
+            {{ status | upper }}
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <h2>&#128176; Account</h2>
+            {% if account %}
+            <div class="stat-row">
+                <span class="stat-label">Equity</span>
+                <span class="stat-value">${{ account.get('equity', '—') }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Buying Power</span>
+                <span class="stat-value">${{ account.get('buying_power', '—') }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Cash</span>
+                <span class="stat-value">${{ account.get('cash', '—') }}</span>
+            </div>
+            {% else %}
+            <p style="color: #666;">Connecting...</p>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <h2>&#128202; Stats</h2>
+            <div class="stat-row">
+                <span class="stat-label">Total Scans</span>
+                <span class="stat-value gold">{{ stats.total_scans }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Trades Placed</span>
+                <span class="stat-value">{{ stats.total_trades }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">AI Decisions</span>
+                <span class="stat-value">{{ stats.total_decisions }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Approval Rate</span>
+                <span class="stat-value gold">{{ stats.approval_rate }}%</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>&#128200; Positions</h2>
+            {% if positions and positions|length > 0 %}
+            <table class="positions-table">
+                <tr><th>Symbol</th><th>Qty</th><th>P&amp;L</th></tr>
+                {% for p in positions %}
+                <tr>
+                    <td style="color: #f0a500;">{{ p.get('symbol', '—') }}</td>
+                    <td>{{ p.get('qty', '—') }}</td>
+                    <td class="{{ 'green' if (p.get('unrealized_pl', '0')|float) >= 0 else 'red' }}">
+                        ${{ p.get('unrealized_pl', '0') }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% else %}
+            <p style="color: #666;">No open positions</p>
+            {% endif %}
+        </div>
+
+        <div class="card full-width">
+            <h2>&#129504; AI Decisions</h2>
+            <div class="decision-list">
+                {% for d in decisions %}
+                <div class="decision-item {{ 'decision-approve' if d.action == 'APPROVE' else 'decision-reject' }}">
+                    <span class="decision-symbol">{{ d.symbol }}</span>
+                    <span style="float: right;">{{ d.action }}</span>
+                    <div class="decision-reasoning">{{ d.reasoning }}</div>
+                    <div class="decision-time">{{ d.timestamp }}</div>
+                </div>
+                {% endfor %}
+                {% if not decisions %}
+                <p style="color: #666;">No decisions yet — waiting for first scan</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card full-width">
+            <h2>&#128188; Trade History</h2>
+            {% for t in trades %}
+            <div class="trade-item">
+                <span style="color: #f0a500;">{{ t.symbol }}</span> —
+                {{ t.action }} {{ t.option_type|upper if t.option_type else '' }}
+                @ ${{ t.strike if t.strike else '—' }}
+                <span style="color: #666; float: right;">{{ t.timestamp[:16] }}</span>
+                {% if t.ai_reasoning %}
+                <div style="color: #888; font-size: 0.8em; margin-top: 4px;">{{ t.ai_reasoning[:120] }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% if not trades %}
+            <p style="color: #666;">No trades yet</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="refresh-bar">
+        Auto-refreshes every 30 seconds | Built for Alpaca AI Trading Agents Hackathon 2026
+    </div>
+
+    <script>
+        setTimeout(function() { location.reload(); }, 30000);
+    </script>
+</body>
+</html>
