@@ -65,14 +65,14 @@ class MCPClient:
         return None
 
     async def get_account(self):
-        for name in ["get_account_info", "get_account", "account_info"]:
+        for name in ["get_account_info"]: 
             if name in self.tools:
                 return await self.call_tool(name)
         logger.warning("No account tool found in MCP")
         return None
 
     async def get_options_chain(self, symbol):
-        for name in ["get_option_chain", "get_options_chain", "option_chain", "get_option_contracts"]:
+        for name in ["get_option_chain"]:
             if name in self.tools:
                 try:
                     return await self.call_tool(name, {"underlying_symbol": symbol})
@@ -84,7 +84,7 @@ class MCPClient:
         return None
 
     async def get_bars(self, symbol, timeframe="1Day", limit=30):
-        for name in ["get_stock_bars", "get_bars", "stock_bars"]:
+        for name in ["get_stock_bars"]:
             if name in self.tools:
                 try:
                     return await self.call_tool(name, {
@@ -97,36 +97,31 @@ class MCPClient:
         return None
 
     async def get_positions(self):
-        for name in ["get_all_positions", "get_positions", "list_positions"]:
+        for name in ["get_all_positions"]:
             if name in self.tools:
                 return await self.call_tool(name)
         return None
 
     async def place_order(self, symbol, qty, side, order_type="market", time_in_force="day", limit_price=None):
-        for name in ["place_order", "create_order", "submit_order"]:
-            if name in self.tools:
-                params = {
-                    "symbol": symbol,
-                    "qty": str(qty),
-                    "side": side,
-                    "type": order_type,
-                    "time_in_force": time_in_force,
-                }
-                if limit_price and order_type == "limit":
-                    params["limit_price"] = str(limit_price)
-                return await self.call_tool(name, params)
-        return None
+        params = {
+            "symbol_or_contract_id": symbol,
+            "qty": str(qty),
+            "side": side,
+            "type": order_type,
+            "time_in_force": time_in_force,
+        }
+        if limit_price and order_type == "limit":
+            params["limit_price"] = str(limit_price)
+        return await self.call_tool("place_option_order", params)
 
     async def get_news(self, symbol):
-        for name in ["get_news", "news", "get_stock_news"]:
-            if name in self.tools:
-                try:
-                    return await self.call_tool(name, {"symbols": symbol, "limit": 5})
-                except Exception:
-                    try:
-                        return await self.call_tool(name, {"symbol": symbol})
-                    except Exception as e:
-                        logger.error(f"News error: {e}")
+        try:
+            return await self.call_tool("get_news", {"symbols": symbol, "limit": 5})
+        except Exception:
+            try:
+                return await self.call_tool("get_news", {"symbol": symbol})
+            except Exception as e:
+                logger.error(f"News error: {e}")
         return None
 
     async def disconnect(self):
