@@ -1,5 +1,6 @@
 mcp>=2.0
 alpaca-mcp-server
+fastmcp==3.4.7
 alpaca-py>=0.30.0
 anthropic
 flask
