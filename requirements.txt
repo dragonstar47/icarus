@@ -1,4 +1,4 @@
-mcp>=2.0
+mcp>=1.24.0,<2.0
 alpaca-mcp-server
 fastmcp==3.4.7
 alpaca-py>=0.30.0
