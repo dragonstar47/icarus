@@ -107,7 +107,6 @@ async def scan_symbol(client, symbol):
 
     # Get price bars for technicals
     bars = await client.get_bars(symbol, timeframe="1Day", limit=30)
-    logger.info(f"{symbol} bars type: {type(bars)}, preview: {str(bars)[:300]}")
     technicals = analyze_technicals(bars)
 
     if not technicals.get("spot_price"):
@@ -127,7 +126,6 @@ async def scan_symbol(client, symbol):
 
     # Get options chain via MCP
     chain = await client.get_options_chain(symbol)
-    logger.info(f"{symbol} chain type: {type(chain)}, keys: {list(chain.keys()) if isinstance(chain, dict) else 'not dict'}, preview: {str(chain)[:400]}")
     if not chain:
         logger.warning(f"{symbol}: No options chain data")
         return None
@@ -250,9 +248,9 @@ async def agent_loop():
             positions = await client.get_positions()
             agent_state["positions"] = positions if isinstance(positions, list) else []
 
-            # ──────────────────────────────────────────
-            # EXIT / RUNNER SYSTEM
-            # ──────────────────────────────────────────
+    # ──────────────────────────────────────────
+    # EXIT / RUNNER SYSTEM
+    # ──────────────────────────────────────────
             if isinstance(positions, list):
                 for pos in positions:
                     try:
@@ -274,37 +272,35 @@ async def agent_loop():
                                 pass
 
                         exit_reason = None
-                        sell_qty = qty  # default: sell all
+                        sell_qty = qty
 
                         # HARD STOP LOSS: -25%
                         if pnl_pct <= -25:
                             exit_reason = f"STOP LOSS: {sym} at {pnl_pct:+.1f}%"
 
-                        # TIME STOP: < 2 DTE, sell everything
+                        # TIME STOP: < 2 DTE
                         elif dte < 2:
                             exit_reason = f"TIME STOP: {sym} — {dte} DTE, avoiding expiry"
 
-                        # TAKE PROFIT: +50%, sell half (runner rides)
+                        # TAKE PROFIT: +50%, sell half
                         elif pnl_pct >= 50 and qty >= 2:
                             sell_qty = qty // 2
-                            exit_reason = f"HALF PROFIT: {sym} at +{pnl_pct:.1f}%, selling {sell_qty}, runner rides"
+                            exit_reason = f"HALF PROFIT: {sym} at +{pnl_pct:.1f}%, runner rides"
 
-                        # TAKE PROFIT: +30%, sell all if only 1 contract
+                        # TAKE PROFIT: +30%, sell all
                         elif pnl_pct >= 30 and qty == 1:
                             exit_reason = f"TAKE PROFIT: {sym} at +{pnl_pct:.1f}%"
 
-                        # TRAILING EXIT: was up big, fading back toward entry
-                        elif pnl_pct <= 5 and pnl_pct > -25:
-                            # Just hold and log
-                            logger.info(f"WATCH: {sym} — P&L: {pnl_pct:+.1f}%, DTE: {dte}")
-                            continue
                         # FADE ALERTS (no sell, just warnings)
                         if not exit_reason:
                             if pnl_pct <= -15:
                                 logger.warning(f"🚨 CRITICAL FADE: {sym} at {pnl_pct:+.1f}% — approaching stop loss")
+                                log_decision(sym, "FADE_CRITICAL", f"Position at {pnl_pct:+.1f}% — approaching stop loss", 0)
                             elif pnl_pct <= -7:
                                 logger.warning(f"⚠️ FADE WARNING: {sym} at {pnl_pct:+.1f}% — watching closely")
+                                log_decision(sym, "FADE_WARNING", f"Position fading at {pnl_pct:+.1f}% — monitoring", 0)
 
+                        # EXECUTE EXIT OR HOLD
                         if exit_reason:
                             logger.info(f"EXIT: {exit_reason}")
                             result = await client.place_order(
@@ -323,6 +319,7 @@ async def agent_loop():
                             logger.info(f"Exit order placed: {result}")
                         else:
                             logger.info(f"HOLD: {sym} — P&L: {pnl_pct:+.1f}%, DTE: {dte}")
+                            log_decision(sym, "HOLD", f"Holding — P&L: {pnl_pct:+.1f}%, DTE: {dte}", 0)
 
                     except Exception as e:
                         logger.error(f"Exit check error: {e}")

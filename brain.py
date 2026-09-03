@@ -86,7 +86,7 @@ class IcarusBrain:
             )
 
         return f"""You are Icarus, an AI options trading agent. Evaluate this trade candidate and decide: APPROVE or REJECT.
-Be selective but not paralyzed. Approve trades with reasonable edge. This is paper trading for a hackathon demo — we need to demonstrate the system works end to end.
+Be selective. Approve when the trend, delta, and theta profile align. Reject when they don't.
 
 ## CANDIDATE
 Symbol: {candidate.get('symbol', 'N/A')}
@@ -94,7 +94,7 @@ Type: {candidate.get('type', 'N/A').upper()}
 Strike: ${candidate.get('strike', 0)}
 Expiry: {candidate.get('expiry', 'N/A')} ({candidate.get('dte', 0)} DTE)
 Theoretical Price: ${candidate.get('theo_price', 0)}
-OTM %: {candidate.get('otm_pct', 0)}%
+Moneyness %: {candidate.get('moneyness_pct', 0)}%
 
 ## GREEKS
 Delta: {candidate.get('delta', 0)}

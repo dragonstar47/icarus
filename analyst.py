@@ -247,14 +247,14 @@ def filter_options_chain(chain_data, spot_price, direction="call"):
                 "theta": greeks["theta"],
                 "vega": greeks["vega"],
                 "iv": round(iv, 4),
-                "otm_pct": round(abs(strike - spot_price) / spot_price * 100, 2),
+                "moneyness_pct": round(abs(strike - spot_price) / spot_price * 100, 2),
             })
 
         except Exception as e:
             logger.debug(f"Skipping contract: {e}")
             continue
 
-    candidates.sort(key=lambda x: x["otm_pct"])
+    candidates.sort(key=lambda x: x["moneyness_pct"])
 
     return candidates[:5]
 
