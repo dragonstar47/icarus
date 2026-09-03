@@ -59,7 +59,11 @@ class MCPClient:
         if result.content:
             text = result.content[0].text
             try:
-                return json.loads(text)
+                parsed = json.loads(text)
+                # Unwrap Alpaca MCP security envelope
+                if isinstance(parsed, dict) and "data" in parsed and "_alpaca_mcp_security" in parsed:
+                    parsed = parsed["data"]
+                return parsed
             except (json.JSONDecodeError, TypeError):
                 return text
         return None
@@ -72,25 +76,46 @@ class MCPClient:
         return None
 
     async def get_options_chain(self, symbol):
-        for name in ["get_option_chain"]:
-            if name in self.tools:
-                try:
-                    return await self.call_tool(name, {"underlying_symbol": symbol})
-                except Exception:
-                    try:
-                        return await self.call_tool(name, {"symbol": symbol})
-                    except Exception as e:
-                        logger.error(f"Options chain error: {e}")
+        from datetime import datetime, timedelta
+        dte_min = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+        dte_max = (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
+
+        # Use get_option_contracts — better date filtering
+        try:
+            result = await self.call_tool("get_option_contracts", {
+                "underlying_symbols": symbol,
+                "expiration_date_gte": dte_min,
+                "expiration_date_lte": dte_max,
+                "status": "active",
+                "limit": 100,
+            })
+            if result:
+                return {"source": "contracts", "data": result}
+        except Exception as e:
+            logger.warning(f"get_option_contracts failed: {e}")
+
+        # Fallback to get_option_chain
+        try:
+            result = await self.call_tool("get_option_chain", {
+                "underlying_symbol": symbol,
+            })
+            if result:
+                return {"source": "chain", "data": result}
+        except Exception as e:
+            logger.error(f"Options chain error: {e}")
         return None
 
     async def get_bars(self, symbol, timeframe="1Day", limit=30):
+        from datetime import datetime, timedelta
+        start = (datetime.now() - timedelta(days=45)).strftime("%Y-%m-%dT00:00:00Z")
         for name in ["get_stock_bars"]:
             if name in self.tools:
                 try:
                     return await self.call_tool(name, {
-                        "symbol": symbol,
+                        "symbols": symbol,
                         "timeframe": timeframe,
                         "limit": limit,
+                        "start": start,
                     })
                 except Exception as e:
                     logger.error(f"Bars error: {e}")
@@ -104,7 +129,7 @@ class MCPClient:
 
     async def place_order(self, symbol, qty, side, order_type="market", time_in_force="day", limit_price=None):
         params = {
-            "symbol_or_contract_id": symbol,
+            "symbol": symbol,
             "qty": str(qty),
             "side": side,
             "type": order_type,
@@ -167,21 +192,24 @@ class RestClient:
         }
 
     async def get_options_chain(self, symbol):
-        import requests
-        headers = {
-            "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
-            "APCA-API-SECRET-KEY": os.environ["ALPACA_SECRET_KEY"],
-        }
-        url = "https://paper-api.alpaca.markets/v2/options/contracts"
-        params = {
-            "underlying_symbols": symbol,
-            "status": "active",
-            "limit": 100,
-        }
-        resp = requests.get(url, headers=headers, params=params)
-        if resp.status_code == 200:
-            return resp.json()
-        logger.error(f"REST options chain error: {resp.status_code} {resp.text}")
+        from datetime import datetime, timedelta
+        # Get contracts 7-45 days out (skip 0-DTE garbage)
+        dte_min = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+        dte_max = (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
+        for name in ["get_option_chain"]:
+            if name in self.tools:
+                try:
+                    return await self.call_tool(name, {
+                        "underlying_symbol": symbol,
+                        "expiration_date_gte": dte_min,
+                        "expiration_date_lte": dte_max,
+                    })
+                except Exception as e:
+                    logger.warning(f"Chain with dates failed: {e}, trying without")
+                    try:
+                        return await self.call_tool(name, {"underlying_symbol": symbol})
+                    except Exception as e2:
+                        logger.error(f"Options chain error: {e2}")
         return None
 
     async def get_bars(self, symbol, timeframe="1Day", limit=30):

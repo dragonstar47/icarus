@@ -90,26 +90,77 @@ def days_to_expiry(expiry_str):
         return max(0, (exp - datetime.now()).days)
     except Exception:
         return 0
+def parse_occ_symbol(occ_symbol):
+    """Parse OCC option symbol like NVDA260902C00285000."""
+    try:
+        # Work backwards: last 8 digits = strike, before that C/P, before that 6 digit date
+        strike_str = occ_symbol[-8:]
+        opt_char = occ_symbol[-9]
+        date_str = occ_symbol[-15:-9]
+        root = occ_symbol[:-15]
 
+        strike = int(strike_str) / 1000
+        opt_type = "call" if opt_char == "C" else "put"
+        expiry = f"20{date_str[:2]}-{date_str[2:4]}-{date_str[4:6]}"
+        return root, expiry, opt_type, strike
+    except Exception:
+        return None, None, None, None
 
 def filter_options_chain(chain_data, spot_price, direction="call"):
     """
     Filter options chain for quality candidates.
-    Returns sorted list of best candidates.
+    Handles both contract list and snapshot formats.
     """
     candidates = []
 
     if not chain_data:
         return candidates
 
-    # Handle different data formats
-    contracts = chain_data if isinstance(chain_data, list) else chain_data.get("option_contracts", chain_data.get("contracts", []))
+    source = chain_data.get("source", "unknown")
+    data = chain_data.get("data", chain_data)
 
-    if not isinstance(contracts, list):
-        logger.warning(f"Unexpected chain format: {type(contracts)}")
-        return candidates
+    contracts_list = []
 
-    for contract in contracts:
+    if source == "contracts":
+        # get_option_contracts format: {"option_contracts": [...]}
+        raw = data if isinstance(data, list) else data.get("option_contracts", [])
+        if isinstance(raw, list):
+            contracts_list = raw
+    elif source == "chain":
+        # get_option_chain snapshot format
+        snapshots = data.get("snapshots", {}) if isinstance(data, dict) else {}
+        for symbol, snap in snapshots.items():
+            root, expiry, opt_type, strike = parse_occ_symbol(symbol)
+            if root:
+                contracts_list.append({
+                    "symbol": symbol,
+                    "strike_price": str(strike),
+                    "expiration_date": expiry,
+                    "type": opt_type,
+                    "snapshot": snap,
+                })
+    else:
+        # Try to auto-detect
+        if isinstance(data, dict) and "snapshots" in data:
+            snapshots = data["snapshots"]
+            for symbol, snap in snapshots.items():
+                root, expiry, opt_type, strike = parse_occ_symbol(symbol)
+                if root:
+                    contracts_list.append({
+                        "symbol": symbol,
+                        "strike_price": str(strike),
+                        "expiration_date": expiry,
+                        "type": opt_type,
+                        "snapshot": snap,
+                    })
+        elif isinstance(data, list):
+            contracts_list = data
+        elif isinstance(data, dict) and "option_contracts" in data:
+            contracts_list = data["option_contracts"]
+
+    logger.info(f"Processing {len(contracts_list)} contracts for filtering")
+
+    for contract in contracts_list:
         try:
             if isinstance(contract, str):
                 continue
@@ -139,20 +190,42 @@ def filter_options_chain(chain_data, spot_price, direction="call"):
             if direction == "put" and strike < spot_price * 0.90:
                 continue
 
-            # Calculate theoretical price and Greeks
+            # Calculate pricing
             T = dte / 365
             sigma = 0.30
             r = 0.05
 
-            theo_price = black_scholes(spot_price, strike, T, r, sigma, direction)
-            greeks = calculate_greeks(spot_price, strike, T, r, sigma, direction)
+            # Check for snapshot data with greeks
+            snap = contract.get("snapshot", {})
+            greeks_data = snap.get("greeks", {}) if snap else {}
+
+            if greeks_data and greeks_data.get("delta"):
+                greeks = {
+                    "delta": round(float(greeks_data.get("delta", 0)), 4),
+                    "gamma": round(float(greeks_data.get("gamma", 0)), 6),
+                    "theta": round(float(greeks_data.get("theta", 0)), 4),
+                    "vega": round(float(greeks_data.get("vega", 0)), 4),
+                }
+                iv = float(greeks_data.get("implied_volatility", sigma))
+            else:
+                greeks = calculate_greeks(spot_price, strike, T, r, sigma, direction)
+                iv = sigma
+
+            theo_price = black_scholes(spot_price, strike, T, r, iv, direction)
+
+            # Get market price if available
+            market_price = 0
+            if snap:
+                quote = snap.get("latestQuote", {})
+                ask = float(quote.get("ap", 0))
+                bid = float(quote.get("bp", 0))
+                if ask > 0 and bid > 0:
+                    market_price = (ask + bid) / 2
 
             # Reject garbage
             if theo_price < 0.10:
                 continue
             if abs(greeks["delta"]) < 0.15:
-                continue
-            if dte <= 3 and strike != spot_price:
                 continue
 
             # Theta check
@@ -168,10 +241,12 @@ def filter_options_chain(chain_data, spot_price, direction="call"):
                 "dte": dte,
                 "type": direction,
                 "theo_price": round(theo_price, 2),
+                "market_price": round(market_price, 2),
                 "delta": greeks["delta"],
                 "gamma": greeks["gamma"],
                 "theta": greeks["theta"],
                 "vega": greeks["vega"],
+                "iv": round(iv, 4),
                 "otm_pct": round(abs(strike - spot_price) / spot_price * 100, 2),
             })
 
@@ -179,8 +254,7 @@ def filter_options_chain(chain_data, spot_price, direction="call"):
             logger.debug(f"Skipping contract: {e}")
             continue
 
-    # Sort by delta (prefer higher probability)
-    candidates.sort(key=lambda x: abs(x["delta"]), reverse=True)
+    candidates.sort(key=lambda x: x["otm_pct"])
 
     return candidates[:5]
 
@@ -225,16 +299,27 @@ def analyze_technicals(bars_data):
             return {"rsi": 50, "ema20": 0, "trend": "neutral", "spot_price": 0}
 
         closes = []
-        if isinstance(bars_data, list):
+
+        # Handle MCP format: {"bars": {"AAPL": [{"c": 316.85, ...}, ...]}}
+        if isinstance(bars_data, dict) and "bars" in bars_data:
+            symbol_bars = bars_data["bars"]
+            if isinstance(symbol_bars, dict):
+                # Get the first (and usually only) symbol's bars
+                first_key = list(symbol_bars.keys())[0]
+                bar_list = symbol_bars[first_key]
+                for bar in bar_list:
+                    closes.append(float(bar.get("c", bar.get("close", 0))))
+            elif isinstance(symbol_bars, list):
+                for bar in symbol_bars:
+                    closes.append(float(bar.get("c", bar.get("close", 0))))
+        elif isinstance(bars_data, list):
             for bar in bars_data:
                 if isinstance(bar, dict):
-                    closes.append(float(bar.get("close", bar.get("c", 0))))
+                    closes.append(float(bar.get("c", bar.get("close", 0))))
                 else:
                     closes.append(float(getattr(bar, "close", 0)))
-        elif isinstance(bars_data, dict):
-            bars_list = bars_data.get("bars", bars_data.get("data", []))
-            for bar in bars_list:
-                closes.append(float(bar.get("close", bar.get("c", 0))))
+        elif isinstance(bars_data, dict) and "data" in bars_data:
+            return analyze_technicals(bars_data["data"])
 
         if not closes:
             return {"rsi": 50, "ema20": 0, "trend": "neutral", "spot_price": 0}

@@ -107,6 +107,7 @@ async def scan_symbol(client, symbol):
 
     # Get price bars for technicals
     bars = await client.get_bars(symbol, timeframe="1Day", limit=30)
+    logger.info(f"{symbol} bars type: {type(bars)}, preview: {str(bars)[:300]}")
     technicals = analyze_technicals(bars)
 
     if not technicals.get("spot_price"):
@@ -126,6 +127,7 @@ async def scan_symbol(client, symbol):
 
     # Get options chain via MCP
     chain = await client.get_options_chain(symbol)
+    logger.info(f"{symbol} chain type: {type(chain)}, keys: {list(chain.keys()) if isinstance(chain, dict) else 'not dict'}, preview: {str(chain)[:400]}")
     if not chain:
         logger.warning(f"{symbol}: No options chain data")
         return None
@@ -219,8 +221,13 @@ async def agent_loop():
     client = await get_client()
     agent_state["status"] = "running"
 
+    # Print options order schema
+    if hasattr(client, 'tools') and 'place_option_order' in client.tools:
+        logger.info(f"ORDER SCHEMA: {json.dumps(client.tools['place_option_order'].inputSchema, indent=2)}")
+
     # Get initial account info
     account = await client.get_account()
+
     agent_state["account"] = account
     if account:
         logger.info(f"Account: equity=${account.get('equity', '?')}, "

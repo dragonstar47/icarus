@@ -16,7 +16,7 @@ class IcarusBrain:
 
     def __init__(self):
         self.client = None
-        self.model = "claude-sonnet-4-20250514"
+        self.model = "claude-sonnet-4-6"
         self.decisions = []
 
     def _get_client(self):
@@ -86,8 +86,7 @@ class IcarusBrain:
             )
 
         return f"""You are Icarus, an AI options trading agent. Evaluate this trade candidate and decide: APPROVE or REJECT.
-
-Be disciplined. Only approve trades with clear edge. When in doubt, REJECT.
+Be selective but not paralyzed. Approve trades with reasonable edge. This is paper trading for a hackathon demo — we need to demonstrate the system works end to end.
 
 ## CANDIDATE
 Symbol: {candidate.get('symbol', 'N/A')}
