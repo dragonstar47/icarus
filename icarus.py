@@ -250,6 +250,83 @@ async def agent_loop():
             positions = await client.get_positions()
             agent_state["positions"] = positions if isinstance(positions, list) else []
 
+            # ──────────────────────────────────────────
+            # EXIT / RUNNER SYSTEM
+            # ──────────────────────────────────────────
+            if isinstance(positions, list):
+                for pos in positions:
+                    try:
+                        sym = pos.get("symbol", "")
+                        qty = int(float(pos.get("qty", "0")))
+                        pnl = float(pos.get("unrealized_pl", 0))
+                        cost = float(pos.get("cost_basis", 0))
+                        pnl_pct = (pnl / cost * 100) if cost > 0 else 0
+
+                        # Parse DTE from option symbol
+                        dte = 99
+                        if len(sym) > 15:
+                            try:
+                                from analyst import parse_occ_symbol, days_to_expiry
+                                _, expiry, _, _ = parse_occ_symbol(sym)
+                                if expiry:
+                                    dte = days_to_expiry(expiry)
+                            except Exception:
+                                pass
+
+                        exit_reason = None
+                        sell_qty = qty  # default: sell all
+
+                        # HARD STOP LOSS: -25%
+                        if pnl_pct <= -25:
+                            exit_reason = f"STOP LOSS: {sym} at {pnl_pct:+.1f}%"
+
+                        # TIME STOP: < 2 DTE, sell everything
+                        elif dte < 2:
+                            exit_reason = f"TIME STOP: {sym} — {dte} DTE, avoiding expiry"
+
+                        # TAKE PROFIT: +50%, sell half (runner rides)
+                        elif pnl_pct >= 50 and qty >= 2:
+                            sell_qty = qty // 2
+                            exit_reason = f"HALF PROFIT: {sym} at +{pnl_pct:.1f}%, selling {sell_qty}, runner rides"
+
+                        # TAKE PROFIT: +30%, sell all if only 1 contract
+                        elif pnl_pct >= 30 and qty == 1:
+                            exit_reason = f"TAKE PROFIT: {sym} at +{pnl_pct:.1f}%"
+
+                        # TRAILING EXIT: was up big, fading back toward entry
+                        elif pnl_pct <= 5 and pnl_pct > -25:
+                            # Just hold and log
+                            logger.info(f"WATCH: {sym} — P&L: {pnl_pct:+.1f}%, DTE: {dte}")
+                            continue
+                        # FADE ALERTS (no sell, just warnings)
+                        if not exit_reason:
+                            if pnl_pct <= -15:
+                                logger.warning(f"🚨 CRITICAL FADE: {sym} at {pnl_pct:+.1f}% — approaching stop loss")
+                            elif pnl_pct <= -7:
+                                logger.warning(f"⚠️ FADE WARNING: {sym} at {pnl_pct:+.1f}% — watching closely")
+
+                        if exit_reason:
+                            logger.info(f"EXIT: {exit_reason}")
+                            result = await client.place_order(
+                                symbol=sym,
+                                qty=sell_qty,
+                                side="sell",
+                                order_type="market",
+                                time_in_force="day",
+                            )
+                            log_trade(
+                                symbol=sym,
+                                action="SELL",
+                                ai_reasoning=exit_reason,
+                                metadata={"exit_result": result, "pnl_pct": pnl_pct, "dte": dte},
+                            )
+                            logger.info(f"Exit order placed: {result}")
+                        else:
+                            logger.info(f"HOLD: {sym} — P&L: {pnl_pct:+.1f}%, DTE: {dte}")
+
+                    except Exception as e:
+                        logger.error(f"Exit check error: {e}")
+
             # Scan all symbols
             trades_this_cycle = 0
             candidates_this_cycle = 0
